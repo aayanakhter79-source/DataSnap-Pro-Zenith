@@ -25,6 +25,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+if "all_invoices" not in st.session_state:
+    st.session_state.all_invoices = []
+
 st.sidebar.title("🚀 Zenith Control Panel")
 usd_to_inr = st.sidebar.number_input("Current USD to INR Rate", value=92.63, step=0.01)
 
@@ -982,17 +985,42 @@ def page_ai():
                     import base64
 
                     b64 = base64.standard_b64encode(file_bytes).decode()
+
+                    # AI ko instruction thoda badal rahe hain taaki wo fix format de
+                    prompt = """Extract financial data and return ONLY a Python dictionary like this:
+                    {"date": "YYYY-MM-DD", "description": "Client Name", "inr_amount": 1000.0, "usd_amount": 50.0, "total_gst": 0.0, "tds_amount": 0.0, "net_receivable": 1000.0, "mode": "USD (Export)"}"""
+
                     parts = [
                         {"inline_data": {"mime_type": mime, "data": b64}},
-                        {
-                            "text": "Extract all financial data from this document: invoice number, date, amounts, GST, TDS, client details. Present in a clean structured format."
-                        },
+                        {"text": prompt},
                     ]
                     resp = model.generate_content(parts)
+
+                    # 1. AI ka response dikhao
                     st.markdown(
                         f"<div class='ai-response'>{resp.text}</div>",
                         unsafe_allow_html=True,
                     )
+
+                    # 2. 🔥 YE HAI MAGIC BUTTON 🔥
+                    try:
+                        # AI ke text se data nikalne ki koshish
+                        import ast
+
+                        data_dict = ast.literal_eval(
+                            resp.text.strip()
+                            .replace("```python", "")
+                            .replace("```", "")
+                        )
+
+                        if st.button("📥 Add this AI Data to Dashboard"):
+                            st.session_state["invoices"].append(data_dict)
+                            st.success("Bhai, data Dashboard mein chala gaya! 🚀")
+                            st.rerun()
+                    except:
+                        st.warning(
+                            "AI response format thoda alag hai, manually 'New Invoice' mein daal do."
+                        )
 
 
 # ─────────────────────────────────────────
