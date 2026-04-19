@@ -42,6 +42,9 @@ _DEFAULTS = {
     # v3: live rate stored in session so it survives navigation
     "usd_rate": 93.08,
     "default_currency": "USD (Export)",
+    # v4 new features
+    "expenses": [],  # Expense tracker entries
+    "rag_chat_history": [],  # RAG chat memory
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -59,6 +62,20 @@ TDS_RATES = {
     "194C – Contractor Company (2%)": 0.02,
     "No TDS": 0.00,
 }
+
+EXPENSE_CATEGORIES = [
+    "Software / Tools",
+    "Internet / Phone",
+    "Co-working Space",
+    "Hardware / Equipment",
+    "Learning / Courses",
+    "Marketing / Ads",
+    "Travel / Transport",
+    "Office Supplies",
+    "Contractor / Subcontractor",
+    "Bank Charges",
+    "Other",
+]
 
 # ════════════════════════════════════════════════════════════════════════════
 #  USERS
@@ -268,6 +285,41 @@ h1,h2,h3{font-family:'Syne',sans-serif!important;font-weight:800!important;}
 }
 div[data-testid="stAlert"]{border-radius:6px!important;}
 footer{display:none!important;}
+
+/* ── v4: Expense & Tax cards ── */
+.expense-tag{
+    display:inline-block;padding:2px 8px;border-radius:4px;
+    font-size:.68rem;font-weight:700;letter-spacing:.04em;
+    background:#1a0a00;color:var(--gold);border:1px solid var(--gold);
+}
+.profit-card{
+    background:var(--card);border:1px solid var(--border);
+    border-top:3px solid var(--green);border-radius:8px;
+    padding:1.2rem 1.4rem;margin-bottom:.8rem;
+}
+.loss-card{
+    background:var(--card);border:1px solid var(--border);
+    border-top:3px solid var(--red);border-radius:8px;
+    padding:1.2rem 1.4rem;margin-bottom:.8rem;
+}
+.tax-pill{
+    display:inline-block;padding:4px 12px;border-radius:20px;
+    font-size:.75rem;font-weight:700;letter-spacing:.05em;
+    background:#001a0a;color:var(--green);border:1px solid var(--green);
+}
+.rag-msg-user{
+    background:#001020;border-left:3px solid var(--blue);border-radius:6px;
+    padding:.7rem 1rem;margin:.5rem 0;font-size:.83rem;color:var(--white);
+}
+.rag-msg-ai{
+    background:#0a1a0a;border-left:3px solid var(--green);border-radius:6px;
+    padding:.7rem 1rem;margin:.5rem 0;font-size:.83rem;color:var(--white);
+    line-height:1.6;
+}
+.rag-source{
+    font-size:.68rem;color:var(--muted);margin-top:.4rem;
+    border-top:1px solid var(--border);padding-top:.3rem;
+}
 </style>
 """,
         unsafe_allow_html=True,
@@ -833,6 +885,9 @@ def render_sidebar() -> str:
             "🧾 New Invoice",
             "📁 Invoice History",
             "🤖 AI Assistant",
+            "🧠 Smart Data Assistant",
+            "💸 Expense Tracker",
+            "🧮 Tax Planner",
             "📤 Export & WhatsApp",
         ]
         if role == "Admin":
@@ -841,11 +896,13 @@ def render_sidebar() -> str:
 
         st.divider()
         n = len(st.session_state["invoices"])
+        ne = len(st.session_state["expenses"])
         st.markdown(
             f"""
 <div style='font-size:.72rem;color:#8b98a5'>
 📅 {date.today().strftime('%d %b %Y')}<br>
 🧾 <b style='color:#00a3ff'>{n}</b> invoice(s) saved<br>
+💸 <b style='color:#ffd700'>{ne}</b> expense(s) tracked<br>
 🔒 Session active
 </div>""",
             unsafe_allow_html=True,
@@ -1486,6 +1543,683 @@ def page_admin():
 
 
 # ════════════════════════════════════════════════════════════════════════════
+#  PAGE: EXPENSE TRACKER  (v4 new)
+# ════════════════════════════════════════════════════════════════════════════
+def page_expenses():
+    st.markdown("<h2>💸 Expense Tracker</h2>", unsafe_allow_html=True)
+    st.markdown(
+        "<div style='color:#8b98a5;font-size:.82rem'>Track business expenses · See Profit/Loss · Export to CA</div>",
+        unsafe_allow_html=True,
+    )
+
+    tab_add, tab_view, tab_pl = st.tabs(
+        ["➕ Add Expense", "📋 All Expenses", "📈 Profit & Loss"]
+    )
+
+    # ── Tab 1: Add Expense ────────────────────────────────────────────────────
+    with tab_add:
+        st.markdown(
+            "<div class='section-header'>New Expense Entry</div>",
+            unsafe_allow_html=True,
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            exp_date = st.date_input("Date", value=date.today(), key="exp_date")
+            exp_cat = st.selectbox("Category", EXPENSE_CATEGORIES, key="exp_cat")
+            exp_vendor = st.text_input(
+                "Vendor / Paid To",
+                placeholder="e.g. Adobe, AWS, WeWork",
+                key="exp_vendor",
+            )
+        with c2:
+            exp_amount = st.number_input(
+                "Amount (₹)",
+                min_value=0.0,
+                value=0.0,
+                step=100.0,
+                format="%.2f",
+                key="exp_amount",
+            )
+            exp_gst_paid = st.number_input(
+                "GST Paid on Expense (₹)",
+                min_value=0.0,
+                value=0.0,
+                step=10.0,
+                format="%.2f",
+                key="exp_gst_paid",
+                help="GST you paid — can be used for Input Tax Credit (ITC)",
+            )
+            exp_desc = st.text_input(
+                "Description / Notes",
+                placeholder="e.g. Annual subscription",
+                key="exp_desc",
+            )
+
+        exp_receipt = st.file_uploader(
+            "Receipt (optional)", type=["pdf", "png", "jpg", "jpeg"], key="exp_receipt"
+        )
+
+        if st.button("💾 Save Expense", use_container_width=True, type="primary"):
+            if exp_amount <= 0:
+                st.warning("⚠️ Amount must be greater than 0.")
+            else:
+                entry = {
+                    "date": exp_date.strftime("%d %b %Y"),
+                    "category": exp_cat,
+                    "vendor": exp_vendor.strip() or "—",
+                    "description": exp_desc.strip() or "—",
+                    "amount": exp_amount,
+                    "gst_paid": exp_gst_paid,
+                    "net_expense": exp_amount - exp_gst_paid,
+                    "has_receipt": exp_receipt is not None,
+                    "saved_by": st.session_state.get("username", ""),
+                }
+                st.session_state["expenses"].append(entry)
+                st.success(
+                    f"✅ Expense saved! Total {len(st.session_state['expenses'])} expenses tracked."
+                )
+                st.rerun()
+
+    # ── Tab 2: View All Expenses ──────────────────────────────────────────────
+    with tab_view:
+        exps = st.session_state["expenses"]
+        if not exps:
+            st.info("No expenses yet — add one above.")
+        else:
+            # Category filter
+            cats = sorted(set(e["category"] for e in exps))
+            sel_cat = st.selectbox(
+                "Filter by Category", ["All"] + cats, key="exp_filter"
+            )
+            filtered_exps = (
+                exps
+                if sel_cat == "All"
+                else [e for e in exps if e["category"] == sel_cat]
+            )
+
+            rows = [
+                {
+                    "#": i + 1,
+                    "Date": e["date"],
+                    "Category": e["category"],
+                    "Vendor": e["vendor"],
+                    "Desc": e["description"],
+                    "Amount(₹)": e["amount"],
+                    "GST Paid(₹)": e["gst_paid"],
+                    "Net(₹)": e["net_expense"],
+                    "Receipt": "✅" if e["has_receipt"] else "—",
+                }
+                for i, e in enumerate(filtered_exps)
+            ]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            # Category-wise summary
+            st.markdown(
+                "<div class='section-header'>Category Breakdown</div>",
+                unsafe_allow_html=True,
+            )
+            cat_data = {}
+            for e in exps:
+                cat_data.setdefault(e["category"], 0)
+                cat_data[e["category"]] += e["amount"]
+            cat_df = pd.DataFrame(
+                {"Category": list(cat_data.keys()), "Amount": list(cat_data.values())}
+            ).set_index("Category")
+            st.bar_chart(cat_df, height=200)
+
+            total_exp = sum(e["amount"] for e in exps)
+            total_itc = sum(e["gst_paid"] for e in exps)
+            st.markdown(
+                f"""
+<div style='display:flex;gap:1rem;margin-top:1rem'>
+    <div class='metric-card' style='flex:1'>
+        <div class='metric-label'>Total Expenses</div>
+        <div class='metric-value'>{fmt_inr(total_exp)}</div>
+        <div class='metric-sub'>{len(exps)} entries</div>
+    </div>
+    <div class='metric-card' style='flex:1;border-top-color:var(--teal)'>
+        <div class='metric-label'>ITC Claimable (GST)</div>
+        <div class='metric-value' style='color:var(--teal)'>{fmt_inr(total_itc)}</div>
+        <div class='metric-sub'>Input Tax Credit</div>
+    </div>
+</div>""",
+                unsafe_allow_html=True,
+            )
+
+            if st.button("🗑 Clear All Expenses"):
+                st.session_state["expenses"] = []
+                st.rerun()
+
+    # ── Tab 3: Profit & Loss ──────────────────────────────────────────────────
+    with tab_pl:
+        inv = st.session_state["invoices"]
+        exps = st.session_state["expenses"]
+
+        total_revenue = sum(safe_float(i.get("inr_amount")) for i in inv)
+        total_gst_collected = sum(safe_float(i.get("total_gst")) for i in inv)
+        total_tds = sum(safe_float(i.get("tds_amount")) for i in inv)
+        total_net_income = sum(safe_float(i.get("net_receivable")) for i in inv)
+
+        total_expenses = sum(e["amount"] for e in exps)
+        total_itc = sum(e["gst_paid"] for e in exps)
+        gst_payable = max(0, total_gst_collected - total_itc)
+
+        gross_profit = total_revenue - total_expenses
+        net_profit = total_net_income - (total_expenses - total_itc)
+        profit_margin = (net_profit / total_revenue * 100) if total_revenue > 0 else 0
+
+        card_cls = "profit-card" if net_profit >= 0 else "loss-card"
+        status_color = "var(--green)" if net_profit >= 0 else "var(--red)"
+        status_label = "PROFIT" if net_profit >= 0 else "LOSS"
+
+        st.markdown(
+            f"""
+<div class='{card_cls}'>
+    <div class='metric-label'>{status_label} THIS PERIOD</div>
+    <div class='metric-value' style='color:{status_color};font-size:2.5rem'>{fmt_inr(abs(net_profit))}</div>
+    <div class='metric-sub'>Margin: {profit_margin:.1f}% | After TDS & ITC</div>
+</div>""",
+            unsafe_allow_html=True,
+        )
+
+        c1, c2, c3 = st.columns(3)
+        for col, lbl, val, col_override in [
+            (c1, "GROSS REVENUE", fmt_inr(total_revenue), None),
+            (c2, "TOTAL EXPENSES", fmt_inr(total_expenses), "var(--red)"),
+            (c3, "GST PAYABLE (NET)", fmt_inr(gst_payable), "var(--gold)"),
+        ]:
+            with col:
+                st.markdown(
+                    f"""
+<div class='metric-card'>
+    <div class='metric-label'>{lbl}</div>
+    <div class='metric-value' style='{"color:" + col_override if col_override else ""}'>{val}</div>
+</div>""",
+                    unsafe_allow_html=True,
+                )
+
+        # P&L Table
+        st.markdown(
+            "<div class='section-header'>Detailed P&L Statement</div>",
+            unsafe_allow_html=True,
+        )
+        pl_rows = [
+            ("📥 Gross Revenue (Taxable)", fmt_inr(total_revenue), "Income"),
+            ("📤 GST Collected (Liability)", fmt_inr(total_gst_collected), "Tax"),
+            ("🔻 Total Expenses", fmt_inr(total_expenses), "Deduction"),
+            ("♻️ ITC (GST on Expenses)", fmt_inr(total_itc), "Credit"),
+            ("🏦 Net GST Payable", fmt_inr(gst_payable), "Tax Due"),
+            ("🔻 TDS Deducted", fmt_inr(total_tds), "Deduction"),
+            ("✅ Net Profit / Loss", fmt_inr(net_profit), status_label),
+        ]
+        st.dataframe(
+            pd.DataFrame(pl_rows, columns=["Line Item", "Amount", "Type"]),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(
+            "💡 Share this P&L with your CA for ITR filing. Export full data from Export page."
+        )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  PAGE: RAG FINANCIAL ASSISTANT  (v4 new)
+#  Retrieval-Augmented Generation — answers questions FROM your actual data
+# ════════════════════════════════════════════════════════════════════════════
+def page_rag():
+    st.markdown("<h2>🧠 Smart Data Assistant</h2>", unsafe_allow_html=True)
+    st.markdown(
+        "<div style='color:#8b98a5;font-size:.82rem'>Ask questions about YOUR invoices & expenses · AI retrieves from your actual data · RAG-powered</div>",
+        unsafe_allow_html=True,
+    )
+
+    model = get_gemini()
+    if not model:
+        st.warning("⚠️ GEMINI_API_KEY missing. Add it to Streamlit Secrets.")
+        return
+
+    inv = st.session_state["invoices"]
+    exps = st.session_state["expenses"]
+
+    if not inv and not exps:
+        st.info(
+            "💡 Add some invoices and expenses first — then ask me anything about your financial data!"
+        )
+        return
+
+    # ── Build RAG Context (the "Retrieval" part) ──────────────────────────────
+    def build_rag_context() -> str:
+        """Serialize all user data into a structured context string for the AI."""
+        lines = ["=== FREELANCER FINANCIAL DATA ===\n"]
+
+        # Invoice summary
+        lines.append(f"INVOICES ({len(inv)} total):")
+        total_rev = sum(safe_float(i.get("inr_amount")) for i in inv)
+        total_gst = sum(safe_float(i.get("total_gst")) for i in inv)
+        total_tds = sum(safe_float(i.get("tds_amount")) for i in inv)
+        total_net = sum(safe_float(i.get("net_receivable")) for i in inv)
+        lines.append(f"  - Total Revenue: ₹{total_rev:,.2f}")
+        lines.append(f"  - Total GST Collected: ₹{total_gst:,.2f}")
+        lines.append(f"  - Total TDS Deducted: ₹{total_tds:,.2f}")
+        lines.append(f"  - Total Net Receivable: ₹{total_net:,.2f}")
+
+        # Client breakdown
+        clients = {}
+        for i in inv:
+            cn = i.get("client_name", "Unknown")
+            clients.setdefault(cn, {"revenue": 0, "count": 0, "net": 0})
+            clients[cn]["revenue"] += safe_float(i.get("inr_amount"))
+            clients[cn]["count"] += 1
+            clients[cn]["net"] += safe_float(i.get("net_receivable"))
+        lines.append("\nCLIENT BREAKDOWN:")
+        for cn, d in sorted(clients.items(), key=lambda x: -x[1]["revenue"]):
+            lines.append(
+                f"  - {cn}: {d['count']} invoice(s), Revenue ₹{d['revenue']:,.2f}, Net ₹{d['net']:,.2f}"
+            )
+
+        # Individual invoices
+        lines.append("\nINDIVIDUAL INVOICES:")
+        for idx, i in enumerate(inv, 1):
+            lines.append(
+                f"  #{idx} [{i['date']}] {i.get('client_name','?')} | "
+                f"{i.get('description','—')} | "
+                f"Mode: {i['mode']} | "
+                f"Taxable: ₹{safe_float(i.get('inr_amount')):,.2f} | "
+                f"Net: ₹{safe_float(i.get('net_receivable')):,.2f}"
+            )
+            if i.get("usd_amount"):
+                lines[-1] += f" | USD: ${safe_float(i.get('usd_amount')):,.2f}"
+
+        # Expense data
+        if exps:
+            total_exp = sum(e["amount"] for e in exps)
+            total_itc = sum(e["gst_paid"] for e in exps)
+            net_profit = total_net - (total_exp - total_itc)
+            lines.append(f"\nEXPENSES ({len(exps)} total):")
+            lines.append(f"  - Total Expenses: ₹{total_exp:,.2f}")
+            lines.append(f"  - ITC (GST on expenses): ₹{total_itc:,.2f}")
+            lines.append(f"  - Net Profit/Loss: ₹{net_profit:,.2f}")
+            lines.append("\nEXPENSE DETAILS:")
+            for e in exps:
+                lines.append(
+                    f"  [{e['date']}] {e['category']} | {e['vendor']} | ₹{e['amount']:,.2f}"
+                )
+
+        lines.append(f"\nCurrent USD Rate: ₹{live_rate():.2f}/USD")
+        lines.append(f"Report Generated: {datetime.now().strftime('%d %b %Y %H:%M')}")
+        return "\n".join(lines)
+
+    # ── Suggested Questions ───────────────────────────────────────────────────
+    st.markdown(
+        "<div class='section-header'>💡 Try asking...</div>", unsafe_allow_html=True
+    )
+    suggestions = [
+        "Who is my best client by revenue?",
+        "What is my total profit this period?",
+        "How much GST do I owe after ITC?",
+        "Which expense category am I spending most on?",
+        "How much TDS can I claim in ITR?",
+        "Give me a financial summary for my CA",
+        "Which month had the highest income?",
+    ]
+    cols = st.columns(3)
+    for i, sug in enumerate(suggestions[:6]):
+        with cols[i % 3]:
+            if st.button(sug, use_container_width=True, key=f"sug_{i}"):
+                st.session_state["rag_pending_q"] = sug
+                st.rerun()
+
+    st.divider()
+
+    # ── Chat Interface ────────────────────────────────────────────────────────
+    chat_history = st.session_state["rag_chat_history"]
+
+    # Show history
+    for msg in chat_history[-10:]:  # show last 10 exchanges
+        if msg["role"] == "user":
+            st.markdown(
+                f"<div class='rag-msg-user'>🧑 {msg['content']}</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f"<div class='rag-msg-ai'>🧠 {msg['content']}"
+                f"<div class='rag-source'>📊 Answer derived from your {len(inv)} invoices"
+                + (f" & {len(exps)} expenses" if exps else "")
+                + "</div></div>",
+                unsafe_allow_html=True,
+            )
+
+    # Input
+    pending = st.session_state.pop("rag_pending_q", "")
+    user_q = st.text_input(
+        "Ask anything about your financial data...",
+        value=pending,
+        placeholder="e.g. Who paid me the most this year?",
+        key="rag_input",
+    )
+
+    col_ask, col_clear = st.columns([3, 1])
+    with col_ask:
+        ask_clicked = st.button(
+            "🧠 Ask Smart Assistant ⚡", use_container_width=True, type="primary"
+        )
+    with col_clear:
+        if st.button("🗑 Clear Chat", use_container_width=True):
+            st.session_state["rag_chat_history"] = []
+            st.rerun()
+
+    if ask_clicked and user_q.strip():
+        rag_context = build_rag_context()
+        system_prompt = f"""You are DataSnap Pro's Smart Financial Assistant for Indian freelancers.
+You ONLY answer questions based on the actual financial data provided below.
+Do NOT make up numbers. If data is insufficient, say so clearly.
+Be concise, specific, and cite actual numbers from the data.
+Format currency as ₹X,XX,XXX.XX
+
+=== USER'S ACTUAL FINANCIAL DATA (retrieved from database) ===
+{rag_context}
+=== END OF DATA ===
+
+Answer the user's question using ONLY the above data."""
+
+        with st.spinner("🧠 Analyzing your data..."):
+            try:
+                full_prompt = system_prompt + f"\n\nUser Question: {user_q}"
+                resp = model.generate_content(full_prompt)
+                answer = resp.text.strip()
+
+                st.session_state["rag_chat_history"].append(
+                    {"role": "user", "content": user_q}
+                )
+                st.session_state["rag_chat_history"].append(
+                    {"role": "assistant", "content": answer}
+                )
+                st.rerun()
+            except Exception as e:
+                st.error(f"⚠️ AI error: {e}")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  PAGE: TAX PLANNER  (v4 new)
+# ════════════════════════════════════════════════════════════════════════════
+def page_tax():
+    st.markdown("<h2>🧮 Tax Planner</h2>", unsafe_allow_html=True)
+    st.markdown(
+        "<div style='color:#8b98a5;font-size:.82rem'>Advance Tax · Section 44ADA · ITR Deadlines · Annual Tax Estimate</div>",
+        unsafe_allow_html=True,
+    )
+
+    inv = st.session_state["invoices"]
+    exps = st.session_state["expenses"]
+
+    total_revenue = sum(safe_float(i.get("inr_amount")) for i in inv)
+    total_expenses = sum(e["amount"] for e in exps)
+    total_tds = sum(safe_float(i.get("tds_amount")) for i in inv)
+    total_itc = sum(e["gst_paid"] for e in exps)
+
+    tab_adv, tab_44ada, tab_gst, tab_deadlines = st.tabs(
+        ["📅 Advance Tax", "📊 Sec 44ADA", "🏦 GST Summary", "⏰ Deadlines"]
+    )
+
+    # ── Tab 1: Advance Tax Calculator ────────────────────────────────────────
+    with tab_adv:
+        st.markdown(
+            "<div class='section-header'>Advance Tax Estimator</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "<div class='info-box'>Advance tax is due if your total tax liability exceeds ₹10,000/year. Pay in 4 instalments to avoid interest under Sec 234B/234C.</div>",
+            unsafe_allow_html=True,
+        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            projected_annual = st.number_input(
+                "Projected Annual Income (₹)",
+                min_value=0.0,
+                value=max(total_revenue * 2, 0.0),  # rough 2x projection
+                step=10000.0,
+                format="%.0f",
+                help="Estimate your full-year taxable income",
+            )
+            regime = st.radio(
+                "Tax Regime", ["New Regime (Default)", "Old Regime"], horizontal=True
+            )
+        with col2:
+            deductions_80c = st.number_input(
+                "80C Deductions (₹) — Old Regime only",
+                min_value=0.0,
+                max_value=150000.0,
+                value=0.0,
+                step=1000.0,
+                disabled="New" in regime,
+            )
+            hra_exempt = st.number_input(
+                "HRA / Other Exemptions (₹)",
+                min_value=0.0,
+                value=0.0,
+                step=1000.0,
+                disabled="New" in regime,
+            )
+
+        # Calculate tax
+        taxable = projected_annual
+        if "Old" in regime:
+            std_ded = 50000
+            taxable = max(0, projected_annual - std_ded - deductions_80c - hra_exempt)
+
+        def calc_tax_new(income):
+            slabs = [
+                (300000, 0),
+                (400000, 0.05),
+                (300000, 0.10),
+                (300000, 0.15),
+                (300000, 0.20),
+                (300000, 0.25),
+                (float("inf"), 0.30),
+            ]
+            tax, remaining = 0, income
+            for slab_limit, rate in slabs:
+                if remaining <= 0:
+                    break
+                taxable_in_slab = min(remaining, slab_limit)
+                tax += taxable_in_slab * rate
+                remaining -= taxable_in_slab
+            return tax
+
+        def calc_tax_old(income):
+            if income <= 250000:
+                return 0
+            elif income <= 500000:
+                return (income - 250000) * 0.05
+            elif income <= 1000000:
+                return 12500 + (income - 500000) * 0.20
+            else:
+                return 112500 + (income - 1000000) * 0.30
+
+        if "New" in regime:
+            base_tax = calc_tax_new(taxable)
+            rebate = min(base_tax, 25000) if taxable <= 700000 else 0
+            base_tax = max(0, base_tax - rebate)
+        else:
+            base_tax = calc_tax_old(taxable)
+
+        surcharge = base_tax * 0.10 if projected_annual > 5000000 else 0
+        health_ed_cess = (base_tax + surcharge) * 0.04
+        gross_tax = base_tax + surcharge + health_ed_cess
+        tax_after_tds = max(0, gross_tax - total_tds)
+
+        # Display
+        lbl = "ESTIMATED TAX PAYABLE" if tax_after_tds > 0 else "NO TAX DUE"
+        card_cls = "loss-card" if tax_after_tds > 0 else "profit-card"
+        color = "var(--red)" if tax_after_tds > 0 else "var(--green)"
+        st.markdown(
+            f"""
+<div class='{card_cls}' style='margin-top:1rem'>
+    <div class='metric-label'>{lbl} (After TDS credit)</div>
+    <div class='metric-value' style='color:{color}'>{fmt_inr(tax_after_tds)}</div>
+    <div class='metric-sub'>Gross Tax: {fmt_inr(gross_tax)} | TDS Credit: {fmt_inr(total_tds)}</div>
+</div>""",
+            unsafe_allow_html=True,
+        )
+
+        if tax_after_tds > 10000:
+            st.markdown(
+                "<div class='section-header'>📅 Advance Tax Schedule</div>",
+                unsafe_allow_html=True,
+            )
+            instalments = [
+                ("15 Jun", 0.15, "1st instalment"),
+                ("15 Sep", 0.45, "Cumulative 45%"),
+                ("15 Dec", 0.75, "Cumulative 75%"),
+                ("15 Mar", 1.00, "100% — Final"),
+            ]
+            rows = [
+                {
+                    "Due Date": f"{d} (FY 2025-26)",
+                    "Cumulative %": pct,
+                    "Amount Due (₹)": fmt_inr(tax_after_tds * pct),
+                    "Notes": note,
+                }
+                for d, pct, note in instalments
+            ]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.success(
+                "✅ Advance tax not required (liability below ₹10,000). Pay as Self-Assessment Tax before ITR filing."
+            )
+
+    # ── Tab 2: Section 44ADA ──────────────────────────────────────────────────
+    with tab_44ada:
+        st.markdown(
+            "<div class='section-header'>Section 44ADA — Presumptive Taxation</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            """<div class='info-box'>
+<b style='color:#00a3ff'>Who can use 44ADA?</b> Professionals (IT, Design, Consulting, Legal, Medical, etc.) with gross receipts ≤ ₹75 lakh/year.<br>
+<b style='color:#00e676'>Benefit:</b> Declare 50% of gross receipts as profit — no need to maintain books of accounts or prove expenses.
+</div>""",
+            unsafe_allow_html=True,
+        )
+        ann_rev_44ada = st.number_input(
+            "Gross Annual Receipts (₹)",
+            min_value=0.0,
+            value=max(total_revenue, 0.0),
+            step=10000.0,
+            format="%.0f",
+            key="ada_rev",
+        )
+        if ann_rev_44ada <= 7500000:
+            presumptive_profit = ann_rev_44ada * 0.50
+            st.markdown(
+                f"""
+<div class='profit-card'>
+    <div class='metric-label'>PRESUMPTIVE PROFIT (50% of Receipts)</div>
+    <div class='metric-value' style='color:var(--green)'>{fmt_inr(presumptive_profit)}</div>
+    <div class='metric-sub'>This is your taxable income under 44ADA — file ITR-4</div>
+</div>""",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f"""
+<div class='info-box' style='margin-top:.5rem'>
+✅ <b>Your gross receipts ({fmt_inr(ann_rev_44ada)}) are within the ₹75L limit</b> — you qualify for 44ADA.<br>
+📝 File <b style='color:#00a3ff'>ITR-4 (Sugam)</b> · No audit required · No expense proof needed<br>
+💡 Actual expenses tracked in DataSnap: {fmt_inr(total_expenses)} — compare to see if 44ADA saves you tax.
+</div>""",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.warning(
+                f"⚠️ Gross receipts ({fmt_inr(ann_rev_44ada)}) exceed ₹75L limit. 44ADA not applicable — file ITR-3 with audit."
+            )
+
+    # ── Tab 3: GST Summary ────────────────────────────────────────────────────
+    with tab_gst:
+        st.markdown(
+            "<div class='section-header'>GST Liability Summary</div>",
+            unsafe_allow_html=True,
+        )
+        total_gst = sum(safe_float(i.get("total_gst")) for i in inv)
+        net_gst = max(0, total_gst - total_itc)
+
+        c1, c2, c3 = st.columns(3)
+        for col, lbl, val, color in [
+            (c1, "GST Collected", fmt_inr(total_gst), None),
+            (c2, "ITC (Input Credit)", fmt_inr(total_itc), "var(--teal)"),
+            (c3, "Net GST Payable", fmt_inr(net_gst), "var(--gold)"),
+        ]:
+            with col:
+                st.markdown(
+                    f"""
+<div class='metric-card'>
+    <div class='metric-label'>{lbl}</div>
+    <div class='metric-value' style='{"color:" + color if color else ""}'>{val}</div>
+</div>""",
+                    unsafe_allow_html=True,
+                )
+
+        st.markdown(
+            "<div class='section-header'>GSTR Filing Guide</div>",
+            unsafe_allow_html=True,
+        )
+        gstr_rows = [
+            (
+                "GSTR-1",
+                "Monthly/Quarterly",
+                "Outward supplies (invoices raised)",
+                "11th of next month / Quarterly",
+            ),
+            (
+                "GSTR-3B",
+                "Monthly",
+                "Self-assessed GST return + payment",
+                "20th of next month",
+            ),
+            ("GSTR-9", "Annual", "Annual GST return", "31 December"),
+        ]
+        st.dataframe(
+            pd.DataFrame(
+                gstr_rows, columns=["Form", "Frequency", "Purpose", "Due Date"]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.info(
+            "💡 Export revenue = LUT filed → 0% GST. Still file GSTR-1 reporting these invoices under 'Zero-rated supply'."
+        )
+
+    # ── Tab 4: Important Deadlines ────────────────────────────────────────────
+    with tab_deadlines:
+        st.markdown(
+            "<div class='section-header'>Key Tax Deadlines FY 2025-26</div>",
+            unsafe_allow_html=True,
+        )
+        deadlines = [
+            ("15 Jun 2025", "Advance Tax 1st Instalment (15%)", "⚠️ Upcoming"),
+            ("31 Jul 2025", "ITR Filing (Non-audit cases)", "📋 ITR Due"),
+            ("15 Sep 2025", "Advance Tax 2nd Instalment (45%)", "⚠️ Upcoming"),
+            ("30 Sep 2025", "Tax Audit Completion", "🔍 Audit"),
+            ("31 Oct 2025", "ITR Filing (Audit cases)", "📋 ITR Due"),
+            ("15 Dec 2025", "Advance Tax 3rd Instalment (75%)", "⚠️ Upcoming"),
+            ("15 Mar 2026", "Advance Tax Final Instalment (100%)", "⚠️ Final"),
+            ("31 Mar 2026", "Last date to file updated ITR (ITR-U)", "🔄 ITR-U"),
+            ("30 Jun 2026", "GSTR-9 Annual Return FY 2024-25", "🏦 GST"),
+        ]
+        st.dataframe(
+            pd.DataFrame(deadlines, columns=["Date", "Event", "Type"]),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.markdown(
+            "<div class='tax-pill'>💡 Set calendar reminders for all advance tax dates to avoid 1% monthly interest under Sec 234C</div>",
+            unsafe_allow_html=True,
+        )
+
+
+# ════════════════════════════════════════════════════════════════════════════
 #  MAIN
 # ════════════════════════════════════════════════════════════════════════════
 def main():
@@ -1504,8 +2238,14 @@ def main():
         page_new_invoice()
     elif "History" in page:
         page_history()
+    elif "Smart" in page:
+        page_rag()
     elif "AI" in page:
         page_ai()
+    elif "Expense" in page:
+        page_expenses()
+    elif "Tax" in page:
+        page_tax()
     elif "Export" in page:
         page_export()
     elif "Admin" in page:
